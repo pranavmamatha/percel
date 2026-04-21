@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "@types/pg": "^8.20.0",
+    "bullmq": "^5.75.2",
     "express": "^5.2.1",
+    "ioredis": "^5.10.1",
     "pg": "^8.20.0"
   },
   "scripts": {
