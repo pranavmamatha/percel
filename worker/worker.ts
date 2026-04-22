@@ -1,26 +1,41 @@
 import { Worker } from "bullmq"
 import { pool } from "../api/db.ts"
 
+import { exec } from "child_process"
+import util from "util"
+
+const execAsync = util.promisify(exec);
+
 const worker = new Worker(
   "deployment",
   async job => {
-    console.log("here2")
-    console.log("Processing Job", job.id)
+    try {
+      const { id, repoUrl, buildCommand } = job.data;
 
-    const { id, repoUrl, buildCommand } = job.data;
+      console.log("Processing Job", job.id)
 
-    await pool.query(
-      "update deployments set status=$1 where id=$2",
-      ["running", id]
-    )
+      await pool.query(
+        "update deployments set status=$1 where id=$2",
+        ["running", id]
+      )
 
-    await new Promise((res) => setTimeout(res, 5000))
-    console.log(job.id, id, job.data.id)
-    await pool.query(
-      "update deployments set status=$1 where id=$2",
-      ["success", id]
-    )
-    return { success: true }
+      const folder = `./temp/${id}`
+      await execAsync(`mkdir -p ${folder}`);
+
+      await execAsync(`git clone ${repoUrl} ${folder}`);
+      await execAsync(`cd ${folder} && bun install`);
+      await execAsync(`cd ${folder} && ${buildCommand}`)
+
+      await pool.query(
+        "update deployments set status=$1 where id=$2",
+        ["success", id]
+      )
+      return { success: true };
+    }
+    catch (err) {
+      console.error("Build failed", err);
+      throw err;
+    }
   },
 
   {
