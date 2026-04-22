@@ -4,7 +4,21 @@ import { pool } from "../api/db.ts"
 import { exec } from "child_process"
 import util from "util"
 
-const execAsync = util.promisify(exec);
+const execAsync = util.promisify(exec)
+
+const runCommand = async (cmd: string) => {
+  try {
+    const { stdout, stderr } = await execAsync(cmd);
+
+    if (stdout) console.log(stdout);
+    if (stderr) console.log(stderr)
+
+    return { success: true }
+  } catch (err) {
+    console.error("Command failed:", err);
+    throw err;
+  }
+}
 
 const worker = new Worker(
   "deployment",
@@ -19,12 +33,22 @@ const worker = new Worker(
         ["running", id]
       )
 
-      const folder = `./temp/${id}`
-      await execAsync(`mkdir -p ${folder}`);
 
-      await execAsync(`git clone ${repoUrl} ${folder}`);
-      await execAsync(`cd ${folder} && bun install`);
-      await execAsync(`cd ${folder} && ${buildCommand}`)
+      const url = new URL(repoUrl);
+      const pathSegments = url.pathname.split('/').filter(Boolean);
+
+      let repoName = pathSegments[1];
+
+      if (repoName?.endsWith('.git')) {
+        repoName = repoName.replace('.git', '');
+      }
+
+      const folder = `./temp/${id}`
+      await runCommand(`mkdir -p ${folder}`);
+
+      await runCommand(`git clone ${repoUrl} ${folder} `);
+      await runCommand(`cd ${folder}/${repoName} && bun install`);
+      await runCommand(`cd ${folder}/${repoName} && ${buildCommand}`)
 
       await pool.query(
         "update deployments set status=$1 where id=$2",
