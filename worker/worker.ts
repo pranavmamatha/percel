@@ -43,12 +43,22 @@ const worker = new Worker(
         repoName = repoName.replace('.git', '');
       }
 
+
       const folder = `./temp/${id}`
+      const container = `deploy-${id}`;
+      const projectPath = `${folder}/${repoName}`;
       await runCommand(`mkdir -p ${folder}`);
 
-      await runCommand(`git clone ${repoUrl} ${folder} `);
-      await runCommand(`cd ${folder}/${repoName} && bun install`);
-      await runCommand(`cd ${folder}/${repoName} && ${buildCommand}`)
+      await runCommand(`git clone ${repoUrl} ${folder}`)
+
+      await runCommand(`
+        docker run --rm \
+          -v ${process.cwd()}/${folder}:/app \
+          -w /app/${repoName} \
+          deploy-runner \
+          sh -c "npm install && ${buildCommand}"
+      `);
+
 
       await pool.query(
         "update deployments set status=$1 where id=$2",
