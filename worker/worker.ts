@@ -1,75 +1,91 @@
-import { Worker } from "bullmq"
-import { pool } from "../api/db.ts"
-
+import { Worker } from "bullmq";
+import { Job } from "bullmq"
+import { pool } from "./../api/db.ts"
 import { exec } from "child_process"
-import util from "util"
+import { promisify } from "util";
+import { resolve } from "dns";
 
-const execAsync = util.promisify(exec)
+const asyncExec = promisify(exec)
+
+const repoNameExtractor = (url: string) => {
+  const myUrl = new URL(url);
+  const pathSegment = myUrl.pathname.split("/").filter(Boolean);
+  let repoName = pathSegment[1]
+  if (repoName?.endsWith(".git")) {
+    repoName = repoName.replace(".git", "")
+  }
+  return repoName
+}
+
 
 const runCommand = async (cmd: string) => {
   try {
-    const { stdout, stderr } = await execAsync(cmd);
-
+    const { stdout, stderr } = await asyncExec(cmd);
     if (stdout) console.log(stdout);
-    if (stderr) console.log(stderr)
-
+    if (stderr) console.warn(stderr);
     return { success: true }
   } catch (err) {
-    console.error("Command failed:", err);
+    console.error("Command Failed: ");
+    console.error(err);
     throw err;
   }
 }
 
+const deployment = async (job: Job) => {
+  try {
+    console.log("Processing deployment:", job.id)
+    const { id, repoUrl, buildCommand } = job.data;
+    await pool.query(
+      "update deployments set status=$1 where id=$2",
+      ["running", id]
+    )
+    const folder = `./temp/${id}`
+    const repoName = repoNameExtractor(repoUrl);
+    const fullPath = folder + "/" + repoName
+
+    await runCommand(`rm -rf ${folder}`);
+    await runCommand(`mkdir -p ${folder}`)
+    await runCommand(`git clone ${repoUrl} ${fullPath} `)
+
+    const dockerCommand = (`
+      docker run --rm \
+        --memory="500m" --cpus="0.5" \
+        -v ${process.cwd()}/${fullPath}:/app \
+        -w /app \
+        deploy-runner \
+        sh -c "npm install && ${buildCommand}"
+    `)
+
+    await Promise.race([
+      runCommand(dockerCommand),
+      new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error("Timeout"))
+        }, 5 * 60 * 1000)
+      })
+    ])
+
+    await runCommand(`rm -rf ${folder}`)
+
+    await pool.query(
+      "update deployments set status=$1 where id=$2",
+      ["success", id]
+    )
+
+    return { success: true }
+
+  } catch (err) {
+    console.error("Build failed: ", err)
+    throw err
+  }
+}
+
+
 const worker = new Worker(
   "deployment",
+
   async job => {
-    try {
-      const { id, repoUrl, buildCommand } = job.data;
-
-      console.log("Processing Job", job.id)
-
-      await pool.query(
-        "update deployments set status=$1 where id=$2",
-        ["running", id]
-      )
-
-
-      const url = new URL(repoUrl);
-      const pathSegments = url.pathname.split('/').filter(Boolean);
-
-      let repoName = pathSegments[1];
-
-      if (repoName?.endsWith('.git')) {
-        repoName = repoName.replace('.git', '');
-      }
-
-
-      const folder = `./temp/${id}`
-      const container = `deploy-${id}`;
-      const projectPath = `${folder}/${repoName}`;
-      await runCommand(`mkdir -p ${folder}`);
-
-      await runCommand(`git clone ${repoUrl} ${folder}`)
-
-      await runCommand(`
-        docker run --rm \
-          -v ${process.cwd()}/${folder}:/app \
-          -w /app/${repoName} \
-          deploy-runner \
-          sh -c "npm install && ${buildCommand}"
-      `);
-
-
-      await pool.query(
-        "update deployments set status=$1 where id=$2",
-        ["success", id]
-      )
-      return { success: true };
-    }
-    catch (err) {
-      console.error("Build failed", err);
-      throw err;
-    }
+    return deployment(job);
   },
 
   {
@@ -82,14 +98,14 @@ const worker = new Worker(
 
 
 worker.on("completed", (job) => {
-  console.log(`Job ${job?.id} completed`);
+  console.log(`Job ${job.id} completed`)
 })
 
 worker.on("failed", async (job, err) => {
-  console.log(`job ${job?.id} failed:`, err.message)
+  console.log(`Job ${job?.id} failed:`, err)
 
   await pool.query(
-    "update deployments set status=$1 where id=$2",
-    ["failed", job?.data.id]
+    "update deployment set status=$1 where id=$2",
+    ["failed", job?.id]
   )
-});
+})
