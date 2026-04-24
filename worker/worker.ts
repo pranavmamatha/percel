@@ -3,7 +3,6 @@ import { Job } from "bullmq"
 import { pool } from "./../api/db.ts"
 import { exec } from "child_process"
 import { promisify } from "util";
-import { resolve } from "dns";
 
 const asyncExec = promisify(exec)
 
