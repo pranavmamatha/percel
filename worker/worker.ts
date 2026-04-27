@@ -3,6 +3,7 @@ import { Job } from "bullmq"
 import { pool } from "./../api/db.ts"
 import { exec } from "child_process"
 import { promisify } from "util";
+import { uploadDirectory } from "./services/storage.ts"
 
 const asyncExec = promisify(exec)
 
@@ -64,6 +65,8 @@ const deployment = async (job: Job) => {
       })
     ])
 
+    await uploadDirectory(fullPath + "/dist", id)
+
     await runCommand(`rm -rf ${folder}`)
 
     await pool.query(
@@ -104,7 +107,7 @@ worker.on("failed", async (job, err) => {
   console.log(`Job ${job?.id} failed:`, err)
 
   await pool.query(
-    "update deployment set status=$1 where id=$2",
+    "update deployments set status=$1 where id=$2",
     ["failed", job?.id]
   )
 })
