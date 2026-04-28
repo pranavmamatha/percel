@@ -21,31 +21,34 @@ const repoNameExtractor = (url: string) => {
 const runCommand = async (cmd: string) => {
   try {
     const { stdout, stderr } = await asyncExec(cmd);
-    if (stdout) console.log(stdout);
-    if (stderr) console.warn(stderr);
-    return { success: true }
-  } catch (err) {
-    console.error("Command Failed: ");
-    console.error(err);
-    throw err;
+    return stdout + "\n" + stderr;
+  } catch (err: any) {
+    return (
+      (err?.stdout || "") + "\n" +
+      (err?.stderr || "") + "\n" +
+      (err.message)
+    )
   }
 }
 
 const deployment = async (job: Job) => {
+
+  const { id, repoUrl, buildCommand, outputDir } = job.data;
+  let logs = "";
+  const folder = `./temp/${id}`
+  const repoName = repoNameExtractor(repoUrl);
+  const fullPath = folder + "/" + repoName
+
   try {
     console.log("Processing deployment:", job.id)
-    const { id, repoUrl, buildCommand } = job.data;
     await pool.query(
       "update deployments set status=$1 where id=$2",
       ["running", id]
     )
-    const folder = `./temp/${id}`
-    const repoName = repoNameExtractor(repoUrl);
-    const fullPath = folder + "/" + repoName
 
-    await runCommand(`rm -rf ${folder}`);
-    await runCommand(`mkdir -p ${folder}`)
-    await runCommand(`git clone ${repoUrl} ${fullPath} `)
+    logs += await runCommand(`rm -rf ${folder}`);
+    logs += await runCommand(`mkdir -p ${folder}`)
+    logs += await runCommand(`git clone ${repoUrl} ${fullPath} `)
 
     const dockerCommand = (`
       docker run --rm \
@@ -56,29 +59,40 @@ const deployment = async (job: Job) => {
         sh -c "npm install && ${buildCommand}"
     `)
 
-    await Promise.race([
+    const buildLogs = await Promise.race([
       runCommand(dockerCommand),
-      new Promise((_, reject) => {
-        setTimeout(() => {
-          reject(new Error("Timeout"))
+      new Promise<string>((_, reject) => {
+        setTimeout(async () => {
+          await runCommand(`docker kill -f deploy-runner`)
+          reject(new Error("Build Timeout"))
         }, 5 * 60 * 1000)
       })
     ])
 
-    await uploadDirectory(fullPath + "/dist", id)
+    logs += buildLogs;
 
-    await runCommand(`rm -rf ${folder}`)
+    logs += await runCommand(`echo "Uploading build..."`);
+    await uploadDirectory(fullPath + `/${outputDir}`, id)
 
     await pool.query(
-      "update deployments set status=$1 where id=$2",
-      ["success", id]
+      "update deployments set status=$1, logs=$2 where id=$3",
+      ["success", logs, id]
     )
 
     return { success: true }
 
-  } catch (err) {
-    console.error("Build failed: ", err)
-    throw err
+  } catch (err: any) {
+    console.error("Build failed:", err);
+
+    logs += "\nError: \n" + (err?.message || "Unknown Error")
+    await pool.query(
+      "update deployments set status=$1, logs=$2 where id=$3",
+      ["failed", logs, id]
+    )
+    throw err;
+  } finally {
+    await runCommand(`rm -rf ${folder}`);
+    await runCommand(`docker rm -f ${id}`);
   }
 }
 
@@ -105,9 +119,4 @@ worker.on("completed", (job) => {
 
 worker.on("failed", async (job, err) => {
   console.log(`Job ${job?.id} failed:`, err)
-
-  await pool.query(
-    "update deployments set status=$1 where id=$2",
-    ["failed", job?.id]
-  )
 })

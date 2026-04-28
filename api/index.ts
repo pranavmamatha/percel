@@ -6,15 +6,15 @@ app.use(express.json())
 
 app.post("/deploy", async (req, res) => {
   try {
-    const { repoUrl, buildCommand } = req.body;
+    const { repoUrl, buildCommand, outputDir = "/dist" } = req.body;
     if (!buildCommand || !repoUrl) {
       return res.status(400).json({ error: "missing fields" })
     }
     const result = await pool.query(
-      `insert into deployments (repo_url, build_command)
-       values ($1, $2)
+      `insert into deployments (repo_url, build_command, outputDir)
+       values ($1, $2, $3)
        returning *`,
-      [repoUrl, buildCommand]
+      [repoUrl, buildCommand, outputDir]
 
     );
 
@@ -23,7 +23,8 @@ app.post("/deploy", async (req, res) => {
     await deployQueue.add("deploy-job", {
       id: deployment.id,
       repoUrl,
-      buildCommand
+      buildCommand,
+      outputDir
     }, {
       attempts: 3,
       backoff: {
