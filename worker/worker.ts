@@ -72,7 +72,7 @@ const deployment = async (job: Job) => {
     logs += buildLogs;
 
     logs += await runCommand(`echo "Uploading build..."`);
-    await uploadDirectory(fullPath + `/${outputDir}`, id)
+    await uploadDirectory(fullPath + `${outputDir}`, id)
 
     await pool.query(
       "update deployments set status=$1, logs=$2 where id=$3",
